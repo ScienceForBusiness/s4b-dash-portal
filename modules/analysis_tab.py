@@ -177,6 +177,11 @@ def render_analysis_tab(global_filtered_data: pd.DataFrame, house_data: pd.DataF
                         value=config["depletion"].get("show_individual", False),
                         key=f"depletion_individual_{config['id']}"
                     )
+                    config["depletion"]["show_quantile_lines"] = st.checkbox(
+                        "Показать 5%-квантиль",
+                        value=config["depletion"].get("show_quantile_lines", False),
+                        key=f"depletion_quantile_{config['id']}"
+                    )
 
                 elif config["chart_type"] == "Кривая эластичности (площадь)":
                     st.markdown("**Настройки кривой эластичности**", unsafe_allow_html=True)
@@ -302,12 +307,34 @@ def render_analysis_tab(global_filtered_data: pd.DataFrame, house_data: pd.DataF
                     global_filtered_data,
                     group_configs,
                     show_individual=config["depletion"].get("show_individual", False),
+                    show_quantile_lines=config["depletion"].get("show_quantile_lines", False),
+                    limit_to_3y=config["depletion"].get("limit_to_3y", True),
                     height=400
                 )
                 if fig_dep is None:
                     st.info("Нет данных для построения кривой выбытия.")
                 else:
                     st.plotly_chart(fig_dep, use_container_width=True, key=unique_key)
+                    if config["depletion"].get("show_quantile_lines", False):
+                        from utils.utils import load_depletion_curves
+                        dc = load_depletion_curves(depletion_curve_path)
+                        for grp in config["selected_groups"]:
+                            ids = (
+                                house_data["house_id"].unique()
+                                if grp == "Глобальный"
+                                else group_configs[grp]["filtered_data"]["house_id"].unique()
+                            )
+                            times = []
+                            for hid in ids:
+                                dfh = dc[dc["house_id"] == hid]
+                                df_cut = dfh[dfh["pct"] <= 95]
+                                if not df_cut.empty:
+                                    times.append(df_cut["time"].min())
+                            if times:
+                                mean_q = np.mean(times)
+                                st.write(f"{grp}: {mean_q:.1f}")
+                            else:
+                                st.write(f"{grp}: нет данных")
 
             elif config["chart_type"] == "Кривая эластичности (площадь)":
                 fig_el = build_elasticity_chart(

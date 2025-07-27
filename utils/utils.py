@@ -65,6 +65,17 @@ def load_depletion_curves(file_path="depletion_curves.parquet"):
         return pd.DataFrame()
 
 
+# Добавляем функцию для загрузки 5%-квантильных времен выбытия по домам
+@st.cache_data(show_spinner=False)
+def load_depletion_quantiles(file_path="depletion_quantiles.parquet"):
+    """Загружает предвычисленные 5%-квантильные времена продажи по домам."""
+    try:
+        return pd.read_parquet(file_path)
+    except Exception as e:
+        st.error(f"Ошибка загрузки квантилей выбытия: {e}")
+        return pd.DataFrame()
+
+
 def hex_to_rgba(hex_color, alpha=255):
     hex_color = hex_color.lstrip("#")
     r = int(hex_color[0:2], 16)

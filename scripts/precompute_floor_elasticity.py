@@ -2,15 +2,17 @@
 import os
 import pandas as pd
 
-FLOOR_ELASTICITY = [(i, i + 1) for i in range(1, 25)]
+CITY_MAX_FLOORS = {"msk_united": 84}
 
-def precompute_floor_elasticity(data_path: str, output_path: str):
+
+def precompute_floor_elasticity(data_path: str, output_path: str, city_key: str):
 
     try:
         df = pd.read_parquet(data_path)
     except Exception as e:
         print(f"Ошибка загрузки данных сделок: {e}")
         return
+
 
     df['area'] = df['area'].round(0)
     df['house_id'] = df['house_id_old']
@@ -22,8 +24,12 @@ def precompute_floor_elasticity(data_path: str, output_path: str):
         aggfunc='mean'
     )
 
+    floor_min = 1
+    floor_max = CITY_MAX_FLOORS.get(city_key, int(df['floor'].quantile(0.95)))
+    floor_pairs = [(i, i + 1) for i in range(floor_min, floor_max)]
+
     records = []
-    for f0, f1 in FLOOR_ELASTICITY:
+    for f0, f1 in floor_pairs:
         if f0 in pivot.columns and f1 in pivot.columns:
             sub = pivot[[f0, f1]].dropna(how='any')
             ratios = sub[f1] / sub[f0]
@@ -44,14 +50,12 @@ def precompute_floor_elasticity(data_path: str, output_path: str):
             as_index=False
         )['eps'].mean()
 
-
     house_ids = df['house_id'].unique()
     full = pd.DataFrame([
         {'from_floor': f0, 'to_floor': f1, 'house_id': hid}
-        for (f0, f1) in FLOOR_ELASTICITY
+        for (f0, f1) in floor_pairs
         for hid in house_ids
     ])
-
 
     results = full.merge(
         df_el,
@@ -73,4 +77,4 @@ if __name__ == "__main__":
         data_path = os.path.join("data", "regions", city, "market_deals", f"{city}_geo_preprocessed_market_deals.parquet")
         output_path = os.path.join("data", "regions", city, "cache", "floor_elasticity.parquet")
         print(f"Обработка города: {city}")
-        precompute_floor_elasticity(data_path, output_path)
+        precompute_floor_elasticity(data_path, output_path, city)

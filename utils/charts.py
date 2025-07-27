@@ -114,6 +114,8 @@ def build_depletion_chart(
         global_filtered_data,
         group_configs,
         show_individual: bool = False,
+        show_quantile_lines: bool = False,
+        limit_to_3y: bool = True,
         height: int = 400
 ):
     from utils.utils import load_depletion_curves, compute_avg_depletion_curve
@@ -190,6 +192,38 @@ def build_depletion_chart(
                     line=dict(width=1, shape="hv", color=color_map.get(group, "#0000FF")),
                     opacity=0.3,
                 ))
+
+    # Добавляем вертикальные линии средних 5%-квантилей времени продажи по группам
+    if show_quantile_lines:
+        # загружаем предвычисленные квантильные времена
+        quantile_path = depletion_curves_file.replace(
+            "depletion_curves.parquet", "depletion_quantiles.parquet"
+        )
+        try:
+            quantile_df = pd.read_parquet(quantile_path)
+        except Exception:
+            quantile_df = pd.DataFrame(columns=["house_id", "q05_time"])
+        for group in selected_groups:
+            # определяем дома для группы
+            if group == "Глобальный":
+                house_ids = global_filtered_data["house_id"].unique()
+            else:
+                house_ids = group_configs[group]["filtered_data"]["house_id"].unique()
+            # фильтруем квантильные времена по домам группы
+            sub = quantile_df[quantile_df["house_id"].isin(house_ids)]["q05_time"].dropna()
+            if not sub.empty:
+                mean_q = sub.mean()
+                fig.add_vline(
+                    x=mean_q,
+                    line_dash="dash",
+                    line_color=color_map.get(group, "#0000FF"),
+                    annotation_text=f"{mean_q:.1f}",
+                    annotation_position="bottom right",
+                )
+
+    # Ограничиваем ось времени тремя годами (1095 дней)
+    if limit_to_3y:
+        fig.update_xaxes(range=[0, 365*3])
 
     fig.update_layout(
         height=height,
@@ -327,22 +361,18 @@ def build_elasticity_chart(selected_groups, global_filtered_data, group_configs,
     return fig
 
 def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_configs):
-    """
-    Строит накопленную кривую эластичности цены по этажам для выбранных групп домов,
-    включая линии тренда вверх и вниз от базового этажа.
-    """
+
     import numpy as np
     import pandas as pd
     from scipy.optimize import minimize
     import plotly.graph_objects as go
     from streamlit import session_state
 
-    # параметры графика
+
     floor_min = 1
-    floor_max = 14
     floor_start = 3
 
-    # читаем city_key из сессии
+
     city_key = session_state.get("city_key", "msk_united")
 
     if city_key is None:
@@ -357,6 +387,8 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
         st.error(f"Ошибка загрузки данных эластичности по этажам: {e}")
         return None
 
+    # will use per-group floor max
+
     fig = go.Figure()
     color_map = {
         grp: ("#FF0000" if grp == "Глобальный" else group_configs[grp]["vis"]["color"])
@@ -364,7 +396,7 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
     }
 
     for group in selected_groups:
-        # выбираем ID домов для группы
+
         if group == "Глобальный":
             house_ids = global_filtered_data["house_id"].unique()
         else:
@@ -381,11 +413,10 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
             .sort_values("from_floor")
         )
         temp_list = df_mean["elasticity"].tolist()
+        group_floor_max = int(df_mean["from_floor"].quantile(0.95)) + 1
 
-        # кумулятивный рост вверх
-        up_list = np.cumprod([1.0] + temp_list[floor_start-1:floor_max-1]).tolist()
+        up_list = np.cumprod([1.0] + temp_list[floor_start-1:group_floor_max-1]).tolist()
 
-        # кумулятивный рост вниз
         down_base = temp_list[floor_min-1:floor_start-1]
         if down_base:
             down_base[-1] = 1.0 / down_base[-1]
@@ -396,7 +427,7 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
         else:
             down_list = []
 
-        x = list(range(floor_min, floor_max + 1))
+        x = list(range(floor_min, group_floor_max + 1))
         y = down_list + up_list
         if len(x) != len(y):
             raise ValueError(f"Axis length mismatch: len(x)={len(x)}, len(y)={len(y)}")
