@@ -173,15 +173,35 @@ def render_analysis_tab(global_filtered_data: pd.DataFrame, house_data: pd.DataF
                 elif config["chart_type"] == "Кривая выбытия":
                     st.markdown("**Настройки кривой выбытия**", unsafe_allow_html=True)
                     config["depletion"]["show_individual"] = st.checkbox(
-                        "Показать индивидуальные кривые",
+                        "Индивидуальные кривые",
                         value=config["depletion"].get("show_individual", False),
                         key=f"depletion_individual_{config['id']}"
                     )
                     config["depletion"]["show_quantile_lines"] = st.checkbox(
-                        "Показать 5%-квантиль",
+                        "5%-я квантиль (среднее)",
                         value=config["depletion"].get("show_quantile_lines", False),
                         key=f"depletion_quantile_{config['id']}"
                     )
+                    config["depletion"]["show_median_quantile"] = st.checkbox(
+                        "5%-я квантиль (медиана)",
+                        value=config["depletion"].get("show_median_quantile", False),
+                        key=f"depletion_median_quantile_{config['id']}"
+                    )
+                    col_a, col_b = st.columns([2, 1])
+                    with col_a:
+                        config["depletion"]["use_custom_max_days"] = st.checkbox(
+                            "Ограничить ось времени",
+                            value=config["depletion"].get("use_custom_max_days", False),
+                            key=f"depletion_use_custom_max_days_{config['id']}"
+                        )
+                    with col_b:
+                        if config["depletion"].get("use_custom_max_days", False):
+                            config["depletion"]["max_days"] = st.number_input(
+                                "Дни",
+                                min_value=0,
+                                value=config["depletion"].get("max_days", 1000),
+                                key=f"depletion_max_days_{config['id']}"
+                            )
 
                 elif config["chart_type"] == "Кривая эластичности (площадь)":
                     st.markdown("**Настройки кривой эластичности**", unsafe_allow_html=True)
@@ -308,6 +328,8 @@ def render_analysis_tab(global_filtered_data: pd.DataFrame, house_data: pd.DataF
                     group_configs,
                     show_individual=config["depletion"].get("show_individual", False),
                     show_quantile_lines=config["depletion"].get("show_quantile_lines", False),
+                    show_median_quantile=config["depletion"].get("show_median_quantile", False),
+                    max_days=config["depletion"].get("max_days", None),
                     limit_to_3y=config["depletion"].get("limit_to_3y", True),
                     height=400
                 )

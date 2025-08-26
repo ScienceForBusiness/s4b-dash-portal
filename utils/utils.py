@@ -7,6 +7,8 @@ import pandas as pd
 import streamlit as st
 from scipy.optimize import minimize
 
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 def convert_df_to_csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")

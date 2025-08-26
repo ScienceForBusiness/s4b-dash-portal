@@ -115,7 +115,9 @@ def build_depletion_chart(
         group_configs,
         show_individual: bool = False,
         show_quantile_lines: bool = False,
+        show_median_quantile: bool = False,
         limit_to_3y: bool = True,
+        max_days: int = None,
         height: int = 400
 ):
     from utils.utils import load_depletion_curves, compute_avg_depletion_curve
@@ -193,9 +195,7 @@ def build_depletion_chart(
                     opacity=0.3,
                 ))
 
-    # Добавляем вертикальные линии средних 5%-квантилей времени продажи по группам
-    if show_quantile_lines:
-        # загружаем предвычисленные квантильные времена
+    if show_quantile_lines or show_median_quantile:
         quantile_path = depletion_curves_file.replace(
             "depletion_curves.parquet", "depletion_quantiles.parquet"
         )
@@ -204,25 +204,35 @@ def build_depletion_chart(
         except Exception:
             quantile_df = pd.DataFrame(columns=["house_id", "q05_time"])
         for group in selected_groups:
-            # определяем дома для группы
             if group == "Глобальный":
                 house_ids = global_filtered_data["house_id"].unique()
             else:
                 house_ids = group_configs[group]["filtered_data"]["house_id"].unique()
-            # фильтруем квантильные времена по домам группы
             sub = quantile_df[quantile_df["house_id"].isin(house_ids)]["q05_time"].dropna()
-            if not sub.empty:
-                mean_q = sub.mean()
-                fig.add_vline(
-                    x=mean_q,
-                    line_dash="dash",
-                    line_color=color_map.get(group, "#0000FF"),
-                    annotation_text=f"{mean_q:.1f}",
-                    annotation_position="bottom right",
-                )
+            if show_quantile_lines:
+                if not sub.empty:
+                    mean_q = sub.mean()
+                    fig.add_vline(
+                        x=mean_q,
+                        line_dash="dash",
+                        line_color=color_map.get(group, "#0000FF"),
+                        annotation_text=f"{mean_q:.1f}",
+                        annotation_position="bottom right",
+                    )
+            if show_median_quantile:
+                if not sub.empty:
+                    median_q = sub.median()
+                    fig.add_vline(
+                        x=median_q,
+                        line_dash="dot",
+                        line_color=color_map.get(group, "#0000FF"),
+                        annotation_text=f"{median_q:.1f}",
+                        annotation_position="bottom left",
+                    )
 
-    # Ограничиваем ось времени тремя годами (1095 дней)
-    if limit_to_3y:
+    if max_days is not None:
+        fig.update_xaxes(range=[0, max_days])
+    elif limit_to_3y:
         fig.update_xaxes(range=[0, 365*3])
 
     fig.update_layout(
@@ -349,36 +359,25 @@ def build_elasticity_chart(selected_groups, global_filtered_data, group_configs,
 
     fig.update_layout(
         height=400,
-        title=f"Кривая эластичности (шаг сегментации = {split_parameter} кв.м)",
         showlegend=True,
         barmode='overlay'
     )
 
     fig.update_xaxes(title_text="Площадь (сегмент)")
     fig.update_yaxes(title_text="Нормированная цена", secondary_y=False)
-    fig.update_yaxes(title_text="Число сделок", secondary_y=True)
+    fig.update_yaxes(title_text="Доля сделок", secondary_y=True)
 
     return fig
 
 def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_configs):
-
     import numpy as np
     import pandas as pd
-    from scipy.optimize import minimize
-    import plotly.graph_objects as go
     from streamlit import session_state
-
 
     floor_min = 1
     floor_start = 3
 
-
     city_key = session_state.get("city_key", "msk_united")
-
-    if city_key is None:
-        return None
-
-    # путь к предвычисленным данным
     path = f"data/regions/{city_key}/cache/floor_elasticity.parquet"
     try:
         df = pd.read_parquet(path)
@@ -387,16 +386,13 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
         st.error(f"Ошибка загрузки данных эластичности по этажам: {e}")
         return None
 
-    # will use per-group floor max
-
-    fig = go.Figure()
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
     color_map = {
         grp: ("#FF0000" if grp == "Глобальный" else group_configs[grp]["vis"]["color"])
         for grp in selected_groups
     }
 
     for group in selected_groups:
-
         if group == "Глобальный":
             house_ids = global_filtered_data["house_id"].unique()
         else:
@@ -406,13 +402,28 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
         if df_group.empty:
             continue
 
+        counts = df_group.groupby("from_floor")["elasticity"].count()
+        total  = counts.sum()
+        shares = counts / total if total > 0 else counts * 0
+
+        fig.add_trace(
+            go.Bar(
+                x=counts.index,
+                y=shares,
+                name=f"{group} сделки",
+                marker_color=color_map[group],
+                opacity=0.4
+            ),
+            secondary_y=True
+        )
+
         df_mean = (
             df_group
             .groupby("from_floor", as_index=False)["elasticity"]
             .mean()
             .sort_values("from_floor")
         )
-        temp_list = df_mean["elasticity"].tolist()
+        temp_list       = df_mean["elasticity"].tolist()
         group_floor_max = int(df_mean["from_floor"].quantile(0.95)) + 1
 
         up_list = np.cumprod([1.0] + temp_list[floor_start-1:group_floor_max-1]).tolist()
@@ -429,39 +440,25 @@ def build_floor_elasticity_chart(selected_groups, global_filtered_data, group_co
 
         x = list(range(floor_min, group_floor_max + 1))
         y = down_list + up_list
-        if len(x) != len(y):
-            raise ValueError(f"Axis length mismatch: len(x)={len(x)}, len(y)={len(y)}")
 
-        def loss_up(params):
-            deg, scale = params
-            return sum(
-                (scale * (x[i] - floor_start)**deg + 1.0 - y[i])**2
-                for i in range(floor_start-1, len(x))
-            )
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="lines+markers",
+                name=group,
+                line=dict(color=color_map[group])
+            ),
+            secondary_y=False
+        )
 
-        def loss_down(scale):
-            return sum(
-                (scale * (floor_start - x[i]) + 1.0 - y[i])**2
-                for i in range(floor_min-1, min(floor_start, len(x)))
-            )
-
-        alpha_up = minimize(loss_up, x0=np.array([0.0, 1.0])).x
-        alpha_down = minimize(loss_down, x0=np.array([0.5])).x
-
-        fig.add_trace(go.Scatter(
-            x=x, y=y, mode="lines+markers", name=group,
-            line=dict(color=color_map[group])
-        ))
-
-    
-
-
+    fig.update_xaxes(title_text="Этаж")
+    fig.update_yaxes(title_text="Нормированная цена", secondary_y=False)
+    fig.update_yaxes(title_text="Доля сделок",      secondary_y=True)
     fig.update_layout(
         height=400,
-        title="Кривая эластичности по этажам",
-        xaxis_title="Этаж",
-        yaxis_title="Нормированная цена",
-        showlegend=True
+        showlegend=True,
+        barmode="overlay"
     )
-
+    
     return fig
